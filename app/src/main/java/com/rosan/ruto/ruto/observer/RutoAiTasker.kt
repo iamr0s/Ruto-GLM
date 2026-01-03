@@ -50,10 +50,6 @@ class RutoAiTasker(
                     handleValue.asFlow()
                 }.mapNotNull {
                     val displayId = it.displayId ?: return@mapNotNull null
-                    Log.e("r0s", "tasker $it")
-                    Log.e(
-                        "r0s", "tasker display ${device.displayManager.getDisplayInfo(displayId)}"
-                    )
                     displayId to it
                 }.collect { (displayId, conversation) ->
                     val convId = conversation.id

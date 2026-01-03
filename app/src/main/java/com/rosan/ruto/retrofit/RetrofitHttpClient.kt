@@ -65,7 +65,7 @@ class RetrofitHttpClient(private val api: GenericApi) : HttpClient {
                 }
 
                 try {
-                    parser.parse(body.byteStream(), listener)
+                    Langchain4jServerSentEventParser.parse(body.byteStream(), listener)
                     listener?.onClose()
                 } catch (e: Exception) {
                     listener?.onError(e)

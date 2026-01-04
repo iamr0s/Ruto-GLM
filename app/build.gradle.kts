@@ -111,6 +111,7 @@ dependencies {
     implementation(libs.langchain4j.kotlin)
     implementation("com.squareup.retrofit2:retrofit:3.0.0")
     implementation(libs.langchain4j.openai)
+    implementation(libs.langchain4j.google.ai.gemini)
 
     implementation("io.coil-kt:coil-compose:2.7.0")
 

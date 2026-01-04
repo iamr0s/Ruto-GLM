@@ -1,7 +1,6 @@
 package com.rosan.ruto.ruto.observer
 
 import android.content.Context
-import android.util.Log
 import com.rosan.installer.ext.util.toast
 import com.rosan.ruto.data.AppDatabase
 import com.rosan.ruto.data.model.ConversationModel
@@ -74,7 +73,6 @@ class RutoAiTasker(
     private suspend fun processAiRequest(
         displayId: Int, conversation: ConversationModel
     ) {
-        Log.e("r0s", "processAiRequest $conversation")
         val messages = messageDao.all(conversation.id)
         val lastMessage = messages.lastOrNull()
         if (lastMessage == null) processAiFirstRequest(conversation)
@@ -84,7 +82,7 @@ class RutoAiTasker(
         ) {
             processAiCaptureRequest(displayId, conversation)
         } else if (lastMessage.source == MessageSource.AI && lastMessage.type == MessageType.TEXT) {
-            processAiResponse(displayId, conversation, lastMessage)
+            processAiFunction(displayId, conversation, lastMessage)
         }
     }
 
@@ -111,27 +109,19 @@ class RutoAiTasker(
     private suspend fun processAiCaptureRequest(
         displayId: Int, conversation: ConversationModel
     ) {
-        Log.e("r0s", "processAiCaptureRequest $conversation")
         try {
-            Log.e("r0s", "processAiCaptureRequest capture $conversation")
             val bitmap = device.displayManager.capture(displayId).bitmap
-            Log.e("r0s", "processAiCaptureRequest addImage $conversation")
             messageDao.addImage(conversation.id, bitmap)
-            Log.e("r0s", "processAiCaptureRequest updateStatus $conversation")
             conversationDao.updateStatus(conversation.id, ConversationStatus.WAITING)
-            Log.e("r0s", "processAiCaptureRequest WAITING $conversation")
         } catch (e: Exception) {
             e.printStackTrace()
             conversationDao.updateStatus(conversation.id, ConversationStatus.ERROR)
-            Log.e("r0s", "processAiCaptureRequest ERROR $conversation")
-            Log.e("r0s", "processAiCaptureRequest ERROR ${e.stackTraceToString()}")
         }
     }
 
-    private suspend fun processAiResponse(
+    private suspend fun processAiFunction(
         displayId: Int, conversation: ConversationModel, message: MessageModel
     ) {
-        Log.e("r0s", "processAiResponse $conversation")
         val response = message.content
         val parsed = GLMCommandParser.parse(response)
         if (parsed !is GLMCommandParser.Status.Completed) return

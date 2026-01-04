@@ -2,7 +2,6 @@ package com.rosan.ruto.ruto.observer
 
 import android.graphics.BitmapFactory
 import android.util.Base64
-import com.rosan.installer.ext.util.coroutines.takeUntil
 import com.rosan.ruto.data.AppDatabase
 import com.rosan.ruto.data.model.AiModel
 import com.rosan.ruto.data.model.ConversationModel
@@ -27,16 +26,15 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flatMapConcat
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.scan
 import kotlinx.coroutines.launch
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -48,6 +46,8 @@ class RutoResponder(database: AppDatabase) : RutoObserver {
 
     private val aisDao = database.ais()
 
+    val retrofitHttpClient = RetrofitHttpClientBuilderFactory().create()
+
     private val aiJobs = ConcurrentHashMap<Long, Job>()
 
     private var job: Job? = null
@@ -55,28 +55,26 @@ class RutoResponder(database: AppDatabase) : RutoObserver {
     @OptIn(ExperimentalCoroutinesApi::class)
     override fun onInitialize(scope: CoroutineScope) {
         job = scope.launch {
-            messageDao.observeLast()
-                .filterNotNull()
-                .distinctUntilChanged()
-                .filter { it.source == MessageSource.USER }
-                .mapNotNull { message ->
-                    val conversation =
-                        conversationDao.get(message.conversationId) ?: return@mapNotNull null
-                    if (conversation.status != ConversationStatus.WAITING) return@mapNotNull null
-                    val messages = messageDao.all(message.conversationId)
-                    conversation to messages
+            conversationDao.observeWhenStatusUpperTime(
+                ConversationStatus.WAITING, updatedAt = System.currentTimeMillis()
+            )
+                .scan(emptyList<ConversationModel>() to emptyList<ConversationModel>()) { (oldValue, _), newValue ->
+                    newValue to newValue.filter { it !in oldValue }
+                }.flatMapConcat { (_, handleValue) ->
+                    handleValue.asFlow()
+                }.mapNotNull {
+                    val messages = messageDao.all(it.id)
+                    if (messages.lastOrNull()?.source != MessageSource.USER) return@mapNotNull null
+                    it to messages
                 }.collect { (conversation, messages) ->
                     val convId = conversation.id
-
                     aiJobs[convId]?.cancelAndJoin()
 
                     aiJobs[convId] = scope.launch {
                         try {
                             processAiResponse(conversation, messages)
-                                .collect()
                         } finally {
-                            if (aiJobs[convId] == coroutineContext[Job])
-                                aiJobs.remove(convId)
+                            if (aiJobs[convId] == coroutineContext[Job]) aiJobs.remove(convId)
                         }
                     }
                 }
@@ -89,9 +87,15 @@ class RutoResponder(database: AppDatabase) : RutoObserver {
     }
 
     private suspend fun processAiResponse(
-        conversation: ConversationModel,
-        messages: List<MessageModel>
-    ): Flow<String> {
+        conversation: ConversationModel, messages: List<MessageModel>
+    ) {
+        val lastUpdateAt = System.currentTimeMillis()
+        conversationDao.updateStatus(
+            conversation.id,
+            status = ConversationStatus.RUNNING,
+            updatedAt = lastUpdateAt
+        )
+
         val aiMessage = MessageModel(
             conversationId = conversation.id,
             source = MessageSource.AI,
@@ -102,74 +106,70 @@ class RutoResponder(database: AppDatabase) : RutoObserver {
         val requestModel = buildStreamingChatModel(conversation)
         val requestMessages = buildMessages(conversation, messages)
 
-        val statusFlow = conversationDao.observeStatus(conversation.id)
-        val lastUpdateAt = System.currentTimeMillis()
-        conversationDao.updateStatus(
-            conversation.id,
-            status = ConversationStatus.RUNNING,
-            updatedAt = lastUpdateAt
-        )
-
-        return requestModel.chatFlow {
+        requestModel.chatFlow {
             messages(requestMessages)
         }.mapNotNull {
             if (it is StreamingChatModelReply.PartialResponse) it.partialResponse else null
         }.filter {
             it.isNotEmpty()
-        }.takeUntil(statusFlow.map { it != ConversationStatus.RUNNING }
-        ).onEach { chunk ->
+        }.onEach { chunk ->
             messageDao.chunkToLast(aiMessageId, chunk)
         }.catch { cause ->
             cause.printStackTrace()
-            val status = when (cause) {
-                is CancellationException -> ConversationStatus.STOPPED
-                else -> {
-                    messageDao.chunkToLast(aiMessageId, "\n${cause.stackTraceToString()}")
-                    messageDao.updateType(aiMessageId, MessageType.ERROR)
-                    ConversationStatus.ERROR
-                }
+            if (cause is CancellationException) {
+                conversationDao.updateStatusSafely(
+                    conversation.id,
+                    status = ConversationStatus.STOPPED,
+                    lastUpdateAt = lastUpdateAt
+                )
+                return@catch
             }
+            messageDao.chunkToLast(
+                aiMessageId,
+                "\n${cause::class.java.name}:${cause.localizedMessage}"
+            )
+            messageDao.updateType(aiMessageId, MessageType.ERROR)
             conversationDao.updateStatusSafely(
-                conversation.id,
-                status = status,
-                lastUpdateAt = lastUpdateAt
+                conversation.id, status = ConversationStatus.ERROR, lastUpdateAt = lastUpdateAt
             )
         }.onCompletion { cause ->
             if (cause != null) return@onCompletion
             conversationDao.updateStatusSafely(
-                conversation.id,
-                status = ConversationStatus.COMPLETED,
-                lastUpdateAt = lastUpdateAt
+                conversation.id, status = ConversationStatus.COMPLETED, lastUpdateAt = lastUpdateAt
             )
-        }
+        }.collect()
     }
 
     private suspend fun buildStreamingChatModel(conversation: ConversationModel): StreamingChatModel {
         val ai = aisDao.get(conversation.aiId)
         return when (ai?.type) {
             AiType.OPENAI -> buildOpenAIStreamingChatModel(ai, conversation)
+            AiType.GEMINI -> buildGeminiStreamingChatModel(ai, conversation)
             else -> throw Exception("ai not found")
         }
     }
 
     private fun buildOpenAIStreamingChatModel(
-        ai: AiModel,
-        conversation: ConversationModel
+        ai: AiModel, conversation: ConversationModel
     ): OpenAiStreamingChatModel {
-        return OpenAiStreamingChatModel.builder().baseUrl(ai.baseUrl)
-            .modelName(ai.modelId).apiKey(ai.apiKey)
-            .httpClientBuilder(RetrofitHttpClientBuilderFactory().create()).build()
+        return OpenAiStreamingChatModel.builder().baseUrl(ai.baseUrl).modelName(ai.modelId)
+            .apiKey(ai.apiKey).httpClientBuilder(retrofitHttpClient).build()
+    }
+
+    private fun buildGeminiStreamingChatModel(
+        ai: AiModel, conversation: ConversationModel
+    ): OpenAiStreamingChatModel {
+        return OpenAiStreamingChatModel.builder().baseUrl(ai.baseUrl).modelName(ai.modelId)
+            .apiKey(ai.apiKey).httpClientBuilder(retrofitHttpClient).build()
     }
 
     private fun buildMessages(
-        conversation: ConversationModel,
-        messages: List<MessageModel>
+        conversation: ConversationModel, messages: List<MessageModel>
     ): List<ChatMessage> {
         // 如果是自动任务，就启动过滤，只要最后一张图
         val lastImageIndex = if (conversation.displayId != null) {
             messages.indexOfLast {
-                it.type == MessageType.IMAGE_PATH
-                        || it.type == MessageType.IMAGE_URL
+                it.type == MessageType.IMAGE_PATH || it.type == MessageType.IMAGE_URL
             }
         } else null
         return messages.foldIndexed(mutableListOf()) { index, acc, message ->

@@ -76,7 +76,10 @@ abstract class DisplayManagerServiceStub @Keep constructor(private val context: 
         density: Int,
         surface: Surface?
     ): Int {
-        val flags = 0
+        // Use PUBLIC flag to allow other apps to display content on the virtual display
+        // Use OWN_CONTENT_ONLY to prevent mirroring and keep activities on this display
+        val flags = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
         val requireSurface = requireSurface(width, height, surface)
         val display =
             manager.createVirtualDisplay(name, width, height, density, requireSurface, flags)

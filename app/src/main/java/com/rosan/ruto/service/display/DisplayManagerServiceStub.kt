@@ -97,9 +97,6 @@ abstract class DisplayManagerServiceStub @Keep constructor(private val context: 
         density: Int,
         surface: Surface?
     ): Int {
-        // Use PUBLIC flag to allow other apps to display content on the virtual display
-        // Use OWN_CONTENT_ONLY to prevent mirroring and keep activities on this display
-        // Use TRUSTED flag (1 << 10) to treat the display as trusted, enabling full-screen activities and disabling freeform mode
         val flags = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or
                 VIRTUAL_DISPLAY_FLAG_TRUSTED or
                 VIRTUAL_DISPLAY_FLAG_OWN_DISPLAY_GROUP

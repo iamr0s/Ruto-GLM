@@ -69,6 +69,27 @@ abstract class DisplayManagerServiceStub @Keep constructor(private val context: 
         return createDisplay(name, width, height, density, surface)
     }
 
+    companion object {
+        /**
+         * Virtual display flags: Indicates that the display is trusted to show system decorations and
+         * receive inputs without users' touch.
+         *
+         * @see #createVirtualDisplay
+         * @see #VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS
+         * @hide
+         */
+        const val VIRTUAL_DISPLAY_FLAG_TRUSTED = 1 shl 10
+
+        /**
+         * Virtual display flags: Indicates that the display should not be a part of the default
+         * DisplayGroup and instead be part of a new DisplayGroup.
+         *
+         * @see #createVirtualDisplay
+         * @hide
+         */
+        const val VIRTUAL_DISPLAY_FLAG_OWN_DISPLAY_GROUP = 1 shl 11
+    }
+
     override fun createDisplay(
         name: String,
         width: Int,
@@ -78,8 +99,11 @@ abstract class DisplayManagerServiceStub @Keep constructor(private val context: 
     ): Int {
         // Use PUBLIC flag to allow other apps to display content on the virtual display
         // Use OWN_CONTENT_ONLY to prevent mirroring and keep activities on this display
+        // Use TRUSTED flag (1 << 10) to treat the display as trusted, enabling full-screen activities and disabling freeform mode
         val flags = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY or
+                VIRTUAL_DISPLAY_FLAG_TRUSTED or
+                VIRTUAL_DISPLAY_FLAG_OWN_DISPLAY_GROUP
         val requireSurface = requireSurface(width, height, surface)
         val display =
             manager.createVirtualDisplay(name, width, height, density, requireSurface, flags)

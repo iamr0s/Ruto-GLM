@@ -101,7 +101,6 @@ abstract class DisplayManagerServiceStub @Keep constructor(private val context: 
         // Use OWN_CONTENT_ONLY to prevent mirroring and keep activities on this display
         // Use TRUSTED flag (1 << 10) to treat the display as trusted, enabling full-screen activities and disabling freeform mode
         val flags = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY or
                 VIRTUAL_DISPLAY_FLAG_TRUSTED or
                 VIRTUAL_DISPLAY_FLAG_OWN_DISPLAY_GROUP
         val requireSurface = requireSurface(width, height, surface)
